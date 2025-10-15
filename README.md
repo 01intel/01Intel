@@ -1,4 +1,4 @@
-# 01Intel Infrastructure & Cyber Lab
+# 01 Intel Infrastructure & Cyber Lab
 
 Hi, I'm Md  IT Systems Administrator, Network Engineer, and Cybersecurity Specialist.
 This monorepo collects my enterprise lab projects, automation scripts, and security experiments

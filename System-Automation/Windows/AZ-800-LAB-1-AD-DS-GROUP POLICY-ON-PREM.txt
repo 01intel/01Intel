@@ -1,0 +1,617 @@
+
+==============================================================
+SKILL-SET: AZ-800 — AD DS + GROUP POLICY (ON-PREM, MULTI-SITE)
+==============================================================
+
+Author      : Md Chowdhury
+Role        : Systems & Network Administrator
+Environment : Edmonton-CA (Primary) + Manchester-UK (Remote)
+Purpose     : AZ-800 Exam + Real-World AD Mastery
+
+==============================================================
+			LAB OBJECTIVE
+==============================================================
+
+- Deploy a second Domain Controller in a remote site
+- Configure AD Sites and Subnets correctly
+- Ensure AD-integrated DNS and replication health
+- Create and manage AD objects
+- Implement Group Policy with LSDOU precedence
+- Apply security filtering and validate results
+
+============================================================
+			LAB ENVIRONMENT
+============================================================
+
+Domain                   : microtech.local
+Primary DC (GUI)         : DC-1 (Edmonton-CA)
+IP Address		 : 10.10.10.10/24
+Secondary DC (GUI/Core)  : DC-2 (Manchester-UK)
+IP Address		 : 192.168.2.15/24
+Admin Workstations       : CA-STN-1, UK-STN-1
+DNS                      : AD-integrated
+Connectivity             : Working site-to-site routing
+
+==============================================================
+PHASE 1 — PREPARE REMOTE SERVER & INSTALL AD DS ROLE
+==============================================================
+
+1. Disable firewall temporarily (both servers) (Only in LAB)
+   netsh advfirewall set allprofiles state off
+(NetworkShell AdvancedFirewall set allprofiles state off)
+   Purpose: Remove firewall interference during setup
+
+2. Configure DNS (Primary DC)
+   Set-DnsClientServerAddress -InterfaceIndex <ID> `
+     -ServerAddresses 10.10.10.10
+   Purpose: Ensure both DCs are resolvable
+
+3. Configure DNS (Remote server)
+   Set-DnsClientServerAddress -InterfaceIndex <ID> `
+     -ServerAddresses 10.10.10.10
+   Purpose: Use primary DC for initial domain join
+
+4. Join remote server to domain
+   Add-Computer -DomainName microtech.local `
+     -Credential (Get-Credential) -Restart
+
+OUTCOME:
+- Remote server joined to domain
+- AD DS role installed
+- Ready for DC promotion
+
+==============================================================
+PHASE 2 — CONFIGURE AD SITES & SUBNETS
+==============================================================
+
+Purpose:
+- Align Active Directory topology with physical locations
+- Enable efficient intra-site and inter-site replication
+- Prepare the environment for additional DCs or RODCs
+
+--------------------------------------------------------------
+KEY CONCEPT TO REMEMBER
+--------------------------------------------------------------
+Intra-site replication  = Automatic, frequent (same site)
+Inter-site replication  = Scheduled, site-link–based (WAN)
+
+--------------------------------------------------------------
+STEP 1 — VERIFY EXISTING TOPOLOGY
+--------------------------------------------------------------
+Get-ADReplicationSiteLink -Filter * | Select Name, Cost, ReplicationFrequencyInMinutes
+Get-ADReplicationSite -Filter * | Select Name
+Get-ADReplicationSubnet -Filter * | Select Name, Site
+
+--------------------------------------------------------------
+STEP 2 — RENAME DEFAULT SITE (OPTIONAL BUT RECOMMENDED)
+--------------------------------------------------------------
+Rename-ADObject `
+  -Identity (Get-ADReplicationSite -Identity "Default-First-Site-Name").DistinguishedName `
+  -NewName "Edmonton-CA"
+
+--------------------------------------------------------------
+STEP 3 — CREATE SUBNET FOR EDMONTON
+--------------------------------------------------------------
+New-ADReplicationSubnet `
+  -Name "10.10.10.0/24" `
+  -Site "Edmonton-CA"
+
+--------------------------------------------------------------
+STEP 4 — CREATE REMOTE SITE (MANCHESTER)
+--------------------------------------------------------------
+New-ADReplicationSite -Name "Manchester-UK"
+
+--------------------------------------------------------------
+STEP 5 — CREATE SUBNET FOR MANCHESTER
+--------------------------------------------------------------
+New-ADReplicationSubnet `
+  -Name "192.168.2.0/24" `
+  -Site "Manchester-UK"
+
+--------------------------------------------------------------
+STEP 6 — CREATE A DEDICATED SITE LINK (BEST PRACTICE)
+--------------------------------------------------------------
+
+# (Recommended) Create dedicated site link
+New-ADReplicationSiteLink `
+  -Name "Edmonton-Manchester-Link" `
+  -SitesIncluded "Edmonton-CA","Manchester-UK" `
+  -ReplicationFrequencyInMinutes 60
+
+Set-ADReplicationSiteLink -Identity "Edmonton-Manchester-Link" -Cost 100
+
+# (Recommended) Remove default link so KCC doesn’t pick an unintended path
+Remove-ADReplicationSiteLink -Identity "DEFAULTIPSITELINK"
+
+# (Optional / Advanced) Disable site link bridging (strict topology control)
+Set-ADReplicationTransport -Identity "IP" -BridgeAllSiteLinks $false
+
+--------------------------------------------------------------
+STEP 7 — SET SITE LINK COST
+--------------------------------------------------------------
+Set-ADReplicationSiteLink `
+  -Identity "Edmonton-Manchester-Link" `
+  -Cost 100
+(Note: For RODC, Cost 200)
+--------------------------------------------------------------
+STEP 8 — VERIFY SITE AND SUBNET MAPPING
+--------------------------------------------------------------
+Get-ADReplicationSubnet | Select-Object Name, Site
+
+--------------------------------------------------------------
+STEP 9 — VERIFY REPLICATION LINKS
+--------------------------------------------------------------
+Get-ADReplicationSiteLink -Filter * | Select Name, Site
+
+--------------------------------------------------------------
+STEP 10 — Explicit Bridgehead Server Selection
+--------------------------------------------------------------
+
+1. Get the IP transport DN:
+-IP Transport DN is the Active Directory object that represents “replication over IP (RPC)”.
+In AD, replication can use different transports.
+The most common one is IP (RPC over TCP/IP).
+
+$ipTransportDN = (Get-ADObject `
+  -SearchBase "CN=Inter-Site Transports,CN=Sites,CN=Configuration,DC=microtech,DC=local" `
+  -LDAPFilter "(cn=IP)").DistinguishedName
+
+$ipTransportDN
+
+2. Add bridgehead transport to DC-1’s Server object
+- The DC chosen to send and receive replication data between sites.
+Bridgehead transport = permission for a DC to handle inter-site replication
+traffic for a specific transport (IP).
+
+$dc1ServerDN = (Get-ADDomainController -Identity "DC-1").ServerObjectDN
+
+3. Now bind together
+Set-ADObject -Identity $dc1ServerDN -Add @{bridgeheadTransportList=$ipTransportDN}
+
+(We added the IP transport to DC-1’s bridgeheadTransportList, 
+making it an explicit inter-site replication bridgehead.)
+
+4. Verify: 
+Get-ADObject -Identity $dc1ServerDN -Properties bridgeheadTransportList |
+Select-Object -ExpandProperty bridgeheadTransportList
+
+Explanation: We identified the AD object representing IP-based inter-site replication 
+(IP Transport DN), then modified the DC-1 Server Object to include that transport in 
+its bridgeheadTransportList. This explicitly designates DC-1 as a permitted bridgehead 
+server for inter-site replication over IP, overriding pure KCC auto-selection.
+
+5. Remove it: 
+Set-ADObject -Identity $dc1ServerDN -Remove @{bridgeheadTransportList=$ipTransportDN}
+
+(Only in Lab practice and specific Strict WAN Design)
+
+--------------------------------------------------------------
+IMPORTANT NOTE
+--------------------------------------------------------------
+- DEFAULTIPSITELINK is NOT required when using custom site links
+- Replication will occur as long as sites are connected by at least one site link
+- Custom site links provide better control and are preferred in enterprise designs
+
+--------------------------------------------------------------
+OUTCOME
+--------------------------------------------------------------
+- Sites represent physical locations
+- Subnets are correctly mapped
+- Replication is controlled, predictable, and scalable
+- Environment is ready for additional DCs or RODCs
+
+==============================================================
+PHASE 3 — CONFIGURE DNS
+==============================================================
+
+REMEMBER:
+
+Forward Lookup (A Records):
+When a computer or server joins an Active Directory domain,
+its A record is automatically created in the AD-integrated
+forward lookup zone via secure dynamic DNS updates.
+
+Reverse Lookup (PTR Records):
+PTR records require an existing reverse lookup zone.
+Reverse lookup zones are not created automatically and must
+be created manually by an administrator before PTR records
+can exist.
+
+------------------------------------------------------------
+
+1. Create AD-integrated reverse lookup zones for each subnet
+   (performed once, replicated to all DCs)
+
+Note:
+A PTR record cannot exist without a reverse lookup zone.
+
+------------------------------------------------------------
+
+2. Create reverse lookup zone for Edmonton subnet
+
+Add-DnsServerPrimaryZone `
+  -NetworkId "10.10.10.0/24" `
+  -ReplicationScope Domain
+
+Creates:
+10.10.10.in-addr.arpa
+
+------------------------------------------------------------
+
+3. Create PTR record for DC-1
+
+Add-DnsServerResourceRecordPtr `
+  -Name "10" `
+  -ZoneName "10.10.10.in-addr.arpa" `
+  -PtrDomainName "DC-1.microtech.local"
+
+Maps:
+10.10.10.10 → DC-1.microtech.local
+
+------------------------------------------------------------
+
+4. Create reverse lookup zone for Manchester subnet
+
+Add-DnsServerPrimaryZone `
+  -NetworkId "192.168.2.0/24" `
+  -ReplicationScope Domain
+
+Creates:
+2.168.192.in-addr.arpa
+
+------------------------------------------------------------
+
+5. Create PTR record for DC-2
+
+Add-DnsServerResourceRecordPtr `
+  -Name "15" `
+  -ZoneName "2.168.192.in-addr.arpa" `
+  -PtrDomainName "DC-2.microtech.local"
+
+Maps:
+192.168.2.15 → DC-2.microtech.local
+
+------------------------------------------------------------
+
+NOTE:
+For any additional DCs or RODCs, ensure:
+- A reverse lookup zone exists for the subnet
+- PTR records are present for DC IPs
+- Records are verified from multiple DCs
+
+------------------------------------------------------------
+
+OUTCOME:
+- DNS forward and reverse resolution is consistentD
+- DC diagnostics and logging are clean
+- AD replication is site-aware and healthy
+
+==============================================================
+PHASE 4 — PROMOTE REMOTE SERVER TO DOMAIN CONTROLLER
+==============================================================
+
+Promotion settings:
+- Existing domain
+- DNS enabled
+- Global Catalog enabled
+- Not an RODC
+
+1. Install AD DS role remotely (from DC-01)
+  Invoke-Command -ComputerName DC-2.microtech.local {
+  Install-WindowsFeature AD-Domain-Services }
+
+2. Verify AD DS role installation
+   Invoke-Command -ComputerName DC-2.microtech.local {
+   Get-WindowsFeature AD-Domain-Services }
+
+3. Promote remote server
+
+Invoke-Command -ComputerName "DC-2.microtech.local" {
+
+    Install-ADDSDomainController `
+      -DomainName "microtech.local" `
+      -Credential (Get-Credential) `
+      -InstallDns `
+      -SiteName "Manchester-UK" `
+      -ReplicationSourceDC "DC-1.microtech.local" `
+      -NoGlobalCatalog:$false `
+      -Force
+} 
+
+
+4. Install RSAT tool to DC-2
+   Check - 
+   	Get-Service NTDS
+   	Get-WindowsFeature AD-Domain-Services
+ 
+   Install-WindowsFeature RSAT-ADDS-Tools
+   Start-Process dsa.msc -Verb RunAs
+
+5. Update DNS client order (DC-1)
+  Set-DnsClientServerAddress -InterfaceIndex <ID> `
+  -ServerAddresses 192.168.2.15, 127.0.0.1
+
+6. Update DNS client order (DC-2)
+   Set-DnsClientServerAddress -InterfaceIndex <ID> `
+  -ServerAddresses 10.10.10.10, 127.0.0.1
+
+7. Validate DNS records
+   nslookup -type=SRV _ldap._tcp.dc._msdcs.microtech.local
+
+8. Validate DNS health
+   dcdiag /test:dns
+
+9. Verify FSMO roles
+   netdom query fsmo
+
+10. Force replication
+   repadmin /syncall /AdeP
+   repadmin /replsummary
+
+OUTCOME:
+- DC-2 promoted successfully
+- DNS records registered
+- Replication functioning
+
+==============================================================
+	Troubleshooting for Remote PowerShell failing
+==============================================================
+Note: *** IF remote execution fails, troubleshoot using below 
+# 1) Ensure WinRM + PSRemoting are enabled and firewall rules are in place
+Enable-PSRemoting -SkipNetworkProfileCheck -Force
+
+# 2) Reset WinRM to defaults (fixes broken auth/listener config)
+winrm invoke restore winrm/config @{}
+
+# 3) Make sure WinRM service is running
+Set-Service WinRM -StartupType Automatic
+Restart-Service WinRM
+
+# 4) Reset PowerShell remoting endpoints (fixes "Access denied" due to endpoint perms)
+Disable-PSSessionConfiguration -Name Microsoft.PowerShell -Force
+Enable-PSSessionConfiguration  -Name Microsoft.PowerShell -Force
+
+# 5) Explicitly grant your admin access to the default endpoint
+Set-PSSessionConfiguration -Name Microsoft.PowerShell -ShowSecurityDescriptorUI
+
+==============================================================
+PHASE 5 — ACTIVE DIRECTORY OBJECT MANAGEMENT
+==============================================================
+My created OU design for LAB: 
+
+OU=Corp
+ ├── OU=Admins
+ │    ├── OU=Tier0
+ │    ├── OU=Tier1
+ │    └── OU=Tier2
+ │
+ ├── OU=Users
+ │    ├── OU=CA
+ │    └── OU=UK
+ │
+ ├── OU=Computers
+ │    ├── OU=Workstations
+ │    │    ├── OU=CA
+ │    │    └── OU=UK
+ │    │
+ │    └── OU=Servers
+ │         ├── OU=AppServers
+ │         └── OU=FileServers
+ │
+ ├── OU=Groups
+ │    ├── OU=Security
+ │    └── OU=RoleBased
+ │
+ └── OU=ServiceAccounts
+
+1. Create Corp OU
+   New-ADOrganizationalUnit -Name Corp `
+     -Path "DC=microtech,DC=local" 
+
+2. Create Admins OU
+	New-ADOrganizationalUnit -Name Admins `
+	-Path "OU=Corp,DC=microtech,DC=local" 
+     
+
+2. Create user (Alex Brown in Remote Site)
+   New-ADUser -Name "Alex Brown" `
+     -GivenName Alex `
+     -Surname Brown `
+     -SamAccountName abrown `
+     -Path "OU=UK,OU=Users,OU=Corp,DC=microtech,DC=local"
+
+3. Set password and enable account
+   Set-ADAccountPassword abrown
+   Enable-ADAccount abrown
+
+4. Create security group
+   New-ADGroup UK-Users `
+     -GroupScope Global `
+     -GroupCategory Security `
+     -Path "OU=Security,OU=Groups,OU=Corp,DC=microtech,DC=local"
+
+5. Add user to group
+   Add-ADGroupMember `
+     -Identity UK-Users `
+     -Members abrown `
+     -Confirm:$false
+
+OUTCOME:
+- OU structure implemented
+- User lifecycle practiced
+- Group-based access ready
+
+
+==============================================================
+AD REPLICATION ISSUE — ROOT CAUSE & TROUBLESHOOT
+==============================================================
+
+Issue:
+Objects (users and groups) created on DC-1 (Edmonton-CA) were not visible
+on DC-2 (Manchester-UK), even though standard replication commands showed
+"successful" status.
+
+Symptoms:
+- Get-ADUser / Get-ADGroup worked when querying DC-1
+- Same queries failed when querying DC-2
+- repadmin /showrepl showed no errors
+- repadmin /syncall /AdeP completed successfully
+- Time synchronization was correct
+
+Root Cause:
+The replication command used earlier included the /P (Push) flag.
+This caused DC-2 to push its local directory data to DC-1 instead of
+pulling updated objects from DC-1.
+As a result, DC-2 never retrieved newly created objects.
+
+Key Insight:
+- PUSH replication sends local changes to partners
+- PULL replication retrieves changes from a partner DC
+- Successful replication status does not guarantee correct direction
+
+--------------------------------------------------------------
+Resolution Steps (Executed on DC-2)
+--------------------------------------------------------------
+
+1. Verify inbound replication is enabled
+   repadmin /options DC-2
+
+   Result:
+   Current DSA Options: IS_GC
+   (Inbound replication was not disabled)
+
+2. Force PULL replication of the Domain partition
+   repadmin /replicate DC-2 DC-1 "DC=microtech,DC=local"
+
+3. Force PULL replication of DNS partitions
+   repadmin /replicate DC-2 DC-1 "DC=DomainDnsZones,DC=microtech,DC=local"
+   repadmin /replicate DC-2 DC-1 "DC=ForestDnsZones,DC=microtech,DC=local"
+
+4. Verify object visibility on DC-2
+   Get-ADUser abrown -Server "DC-2.microtech.local"
+   Get-ADGroup -Filter 'Name -eq "UK-Users"' `
+     -SearchBase "DC=microtech,DC=local" `
+     -Server "DC-2.microtech.local"
+
+--------------------------------------------------------------
+Outcome
+--------------------------------------------------------------
+
+- User "Alex Brown" replicated successfully to DC-2
+- Security group "UK-Users" replicated successfully to DC-2
+- Multi-site Active Directory replication confirmed healthy
+- DC-2 now fully synchronized with DC-1
+
+--------------------------------------------------------------
+Key Learning (Exam + Real World)
+--------------------------------------------------------------
+
+repadmin /syncall /P performs PUSH replication.
+To retrieve missing objects, explicitly force a PULL using:
+
+repadmin /replicate <DestinationDC> <SourceDC> "<NamingContext>"
+
+Successful replication status does not always mean correct replication
+direction.
+
+==============================================================
+PHASE 6 — CREATE DOMAIN BASELINE GPO
+==============================================================
+
+GPO Name : ORG-Standards
+Link     : Domain level
+Applicable: Domain-wide 
+
+GPMC.MSC > microtech.local > Right-Click
+		Create a GPO in this domain, and Link it here
+			Name: ORG-Standards
+Configuration and Deployment: 
+ORG-Standards > Right-Click > Edit
+
+User Settings:
+- Wallpaper deployment 
+Note: Copy the image into → \\microtech.local\SYSVOL\microtech.local\Policies\Wallpaper
+Note: Name it into Base.jpg
+User Configuration → Policies → Administrative Templates → Desktop → Desktop Wallpaper → Enable 
+Wallpaper Name: microtech.local\SYSVOL\microtech.local\Policies\Wallpaper\base.jpg
+
+
+Purpose:
+- Organization-wide baseline security
+
+OUTCOME:
+- Baseline controls enforced domain-wide
+
+==============================================================
+PHASE 7 — CREATE OU-LEVEL OVERRIDE GPO
+==============================================================
+
+GPO Name : UK-Override
+Link     : OU = UK
+
+User Settings:
+- Wallpaper deployment 
+	Note: Copy the image into → microtech.local\SYSVOL\microtech.local\Policies\Wallpaper
+	Note: Name it into red.jpg
+User Configuration → Policies → Administrative Templates → Desktop → Desktop Wallpaper → Enable 
+Wallpaper Name: microtech.local\SYSVOL\microtech.local\Policies\Wallpaper\red.jpg
+
+Purpose:
+- Demonstrate LSDOU precedence
+
+OUTCOME: UK-Override wins
+
+==============================================================
+PHASE 8 — SECURITY FILTERING
+==============================================================
+
+Remove:
+- Authenticated Users
+
+Add:
+- UK-Users (group)
+- UK-STN-1 (computer)
+
+Purpose:
+- Target GPO to specific users and machines
+
+OUTCOME:
+- GPO applies only to intended scope
+
+==============================================================
+PHASE 9 — VERIFY GPO APPLICATION
+==============================================================
+
+1. Force policy update
+   gpupdate /force
+
+2. Verify settings
+   - Registry Editor blocked where expected
+   - Screen saver behaviour correct
+
+3. Group Policy Modelling
+   User     : abrown
+   Computer : UK-STN-1
+   Result   : UK-Override wins
+
+OUTCOME:
+- GPO behaviour validated
+- LSDOU precedence confirmed
+
+==============================================================
+FINAL OUTCOME
+==============================================================
+- Multi-site AD DS deployed correctly
+- DNS and replication stable
+- OU and group lifecycle implemented
+- Group Policy designed and validated
+- Security filtering mastered
+- AZ-800 exam-ready enterprise scenario
+==============================================================
+END OF SKILL-SET
+==============================================================
+
+
+Practice rule: 
+		Everyday until turns into muscle memory.
+		

@@ -1,0 +1,42 @@
+DC=microtech,DC=local
+│
+├── Builtin
+│
+├── Computers                (default container)
+│
+├── Corp
+│   │
+│   ├── Admins
+│   │   ├── Tier-0
+│   │   ├── Tier-1
+│   │   └── Tier-2
+│   │
+│   ├── Computers
+│   │   ├── Servers
+│   │   │   ├── AppServers
+│   │   │   └── FileServers
+│   │   │
+│   │   └── Workstations
+│   │       ├── CA
+│   │       └── UK
+│   │
+│   ├── Groups
+│   │   ├── Distribution Groups
+│   │   └── Security
+│   │
+│   └── Users
+│       ├── CA
+│       │   └── Alex Brown   (User)
+│       └── UK
+│
+├── Domain Controllers        (default OU – untouched)
+│
+├── ForeignSecurityPrincipals
+├── Keys
+├── LostAndFound
+├── Managed Service Accounts
+├── Program Data
+├── System
+├── Users                    (default container)
+├── NTDS Quotas
+└── TPM Devices

@@ -1,0 +1,35 @@
+======================================================================
+			Proxmox LAB Network Architecture 
+======================================================================
+Concept:
+	- Microtech is a Canadian Computer Memory, Storage disk producer company
+	- Microtech has production and management locations in Canada, UK, Germany, Australia, Bangladesh
+		although outlets across the world. 
+		- This would be primary site for all testing related Windows Server and Azure. 
+	- Nokia is another Canadian networking Company. 
+		- This Site will be used to test Trust, Conditional Dns Forwarding, permission.
+	- OSLO will monitor threats in this virtual Global environment 
+		- Responsible for Defensive Security Practice
+	- Denver will be used for DarkWeb database, Threat actors and Offensive security in this virtual 
+	  Global environment.
+	- Doha will be used for various banking services, 3rd party application, external apps, Global data 
+	  storage (Microtech and Nokia) 
+	
+Vmbr1/Eth1-rule 10--10.10.10.0/24--(Edmonton,AB,CA)--100--DC-1,DHCP,DNS,AD CS, AD FS, AD LDS, IPAM--8 Servers--2workstation
+
+Vmbr2/Eth2-rule 20--192.168.1.0/24--(Calgary,AB,CA)--200--nokia.local--2 Servers--1 workstation
+
+Vmbr3/Eth3-rule 30--192.168.2.0/24--(Manchester,UK)--300--DC-2,RDGW,RDWA,RDSH1,RDH2 (5 Servers)
+
+Vmbr4/Eth4-rule 40--192.168.3.0/24--(Berlin,DE)------400--RODC, STN
+
+Vmbr5/Eth5-rule 50--192.168.4.0/24--(Melbourne,AU)---500--CHILD-Domain, Kingston Technology - Ch-DC, SFTP,STN.222
+
+Vmbr6/Eth6-rule 60--192.168.5.0/24--(Sylhet,BD)------600--TREE-DOMAIN, DELTA ELECTRONICS, - TREE-DC, SFTP, STN. 
+
+Vmbr7/Eth7-rule 70--192.168.6.0/24--(Oslo,NO)--------700--Global Cybercrime Branch Unit (Defensive Security)
+
+Vmbr8/Eth8-rule 80--192.168.7.0/24--(Denver,CO,US)---800--DarkWeb, Threat Actors, Crimes, Drugs (Offensive Security) 
+
+Vmbr9/Eth9-rule 90--192.168.8.0/24--(Doha,QA) ------ 900--Service Provider -3rd Party web application, Banking (Utility Environment)
+===========================================================================

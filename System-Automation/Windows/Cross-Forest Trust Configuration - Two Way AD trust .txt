@@ -1,0 +1,259 @@
+===================================================================================
+SKILL-SET: AZ-800 - Cross-Forest Trust Configuration microtech.local↔nokia.local
+===================================================================================
+
+Author      : Md
+Level       : Intermediate–Advanced (Enterprise Active Directory)
+Purpose     : Build, secure, and validate a two-way forest trust
+Environment : Two independent AD forests connected via Site-to-Site VPN
+
+-----------------------------------------------------------------------------------
+FOREST & DOMAIN OVERVIEW
+-----------------------------------------------------------------------------------
+Microtech Solar Energy Corporation 
+Forest-A / Domain-A : microtech.local
+  DC Name           : DC-1.microtech.local
+  DC IP             : 10.10.10.10
+
+Nokia Networking Limited
+Forest-B / Domain-B : nokia.local
+  DC Name           : DC-1.nokia.local
+  DC IP             : 192.168.1.115
+
+===================================================================================
+PHASE 0 — DOMAIN & FOREST CONTEXT (CONCEPT)
+===================================================================================
+
+• A forest is the security boundary in Active Directory.
+• A domain is an administrative boundary inside a forest.
+• This lab builds a FOREST TRUST between two independent forests.
+
+Trust allows:
+• Authentication across forests (identity recognition)
+• Authorization remains controlled locally (NTFS, logon rights, groups)
+
+===================================================================================
+PHASE 1 — BUILD SITE-B FOREST (nokia.local)
+===================================================================================
+
+--- Step 1.1 — Install AD DS and DNS Role (Run on Nokia DC) ---
+
+Install-WindowsFeature AD-Domain-Services,DNS -IncludeManagementTools
+
+--- Step 1.2 — Promote Server to NEW FOREST ROOT DOMAIN ---
+
+# Securely prompt for DSRM password
+$dsrm = Read-Host "Enter DSRM password" -AsSecureString
+
+Install-ADDSForest `
+  -DomainName "nokia.local" `
+  -DomainNetbiosName "NOKIA" `
+  -ForestMode "WinThreshold" `
+  -DomainMode "WinThreshold" `
+  -InstallDns `
+  -CreateDnsDelegation:$false `
+  -DatabasePath "C:\Windows\NTDS" `
+  -LogPath "C:\Windows\NTDS" `
+  -SysvolPath "C:\Windows\SYSVOL" `
+  -SafeModeAdministratorPassword $dsrm `
+  -Force
+
+# Server reboots automatically after promotion
+
+===================================================================================
+PHASE 2 — SITE-TO-SITE VPN VALIDATION (POWERSHELL CHECKS)
+===================================================================================
+
+All checks below are run from ONE DC to the OTHER DC.
+
+--- DNS (53 TCP/UDP) ---
+Test-NetConnection 192.168.1.115 -Port 53
+
+--- Kerberos (88 TCP) ---
+Test-NetConnection 192.168.1.115 -Port 88
+
+--- LDAP (389 TCP) ---
+Test-NetConnection 192.168.1.115 -Port 389
+
+--- SMB (445 TCP) ---
+Test-NetConnection 192.168.1.115 -Port 445
+
+--- RPC Endpoint Mapper (135 TCP) ---
+Test-NetConnection 192.168.1.115 -Port 135
+
+--- RPC Dynamic Ports (Example test) ---
+Test-NetConnection 192.168.1.115 -Port 49152
+
+NOTE:
+• Dynamic RPC ports are a RANGE (49152–65535)
+• Firewall must allow the FULL RANGE
+• Time sync must also be working (Kerberos dependency)
+
+===================================================================================
+PHASE 3 — DNS NAME RESOLUTION (CONDITIONAL FORWARDERS)
+===================================================================================
+
+--- Step 3.1 — On microtech.local DC (Site-A) ---
+
+Add-DnsServerConditionalForwarderZone `
+  -Name "nokia.local" `
+  -MasterServers "192.168.1.115" `
+  -ReplicationScope "Domain"
+
+--- Step 3.2 — On nokia.local DC (Site-B) ---
+
+Add-DnsServerConditionalForwarderZone `
+  -Name "microtech.local" `
+  -MasterServers "10.10.10.10" `
+  -ReplicationScope "Domain"
+
+===================================================================================
+PHASE 4 — CONNECTIVITY & DNS VALIDATION
+===================================================================================
+
+--- From MicroTech DC ---
+
+Resolve-DnsName nokia.local
+Resolve-DnsName DC-1.nokia.local
+Resolve-DnsName _ldap._tcp.dc._msdcs.nokia.local
+nltest /dsgetdc:nokia.local
+
+
+--- From NOKIA DC ---
+
+Resolve-DnsName microtech.local
+Resolve-DnsName DC-1.microtech.local
+nltest /dsgetdc:microtech.local
+
+===================================================================================
+PHASE 5 — CREATE TWO-WAY FOREST TRUST
+===================================================================================
+
+--- Run ONCE from EITHER DC (Recommended: MicroTech DC) ---
+
+netdom trust nokia.local /domain:microtech.local /add /twoway `
+  /userd:microtech\Administrator /passwordd:* `
+  /usero:NOKIA\Administrator /passwordo:*
+
+Explanation:
+• /add        → creates the trust
+• /twoway     → users authenticate in both directions
+• userd/o     → admin credentials from both forests
+
+===================================================================================
+PHASE 6 — TRUST AUTHENTICATION STYLE (DECISION POINT)
+===================================================================================
+-----------------------------------
+STYLE 1 — Forest-Wide Authentication
+-----------------------------------
+
+Meaning:
+• All authenticated users from the other forest can attempt logon
+• Access is still limited by NTFS, groups, and logon rights
+
+Use when:
+
+• Partner company
+  Example: Two sister companies owned by the same parent organization
+
+• Internal subsidiary
+  Example: Head Office forest trusts a regional branch forest
+
+• Low-friction collaboration
+  Example: Shared file servers, printers, or applications
+
+Command (run ONCE from either DC):
+
+netdom trust nokia.local /domain:microtech.local /selectiveauth:no
+netdom trust nokia.local /domain:microtech.local /quarantine:no
+
+Command explanation:
+• selectiveauth:no → allows forest-wide authentication
+• quarantine:no   → disables SID filtering (full trust)
+
+-----------------------------------
+STYLE 2 — Selective Authentication (ENTERPRISE DEFAULT)
+-----------------------------------
+
+Meaning:
+• Users are authenticated but blocked by default
+• Must be explicitly allowed on each server
+
+Use when:
+• Vendor access
+• Regulatory compliance
+• Zero-Trust security model
+
+Command (run ONCE from either DC):
+
+netdom trust nokia.local /domain:microtech.local /selectiveauth:yes
+
+Command explanation:
+• selectiveauth:yes → blocks authentication unless explicitly permitted
+
+Next step:
+• Grant "Allowed to authenticate" on specific computer objects
+
+===================================================================================
+PHASE 7 — TRUST VERIFICATION
+===================================================================================
+
+--- Run from either DC ---
+
+Get-ADTrust -Filter *
+* Time check between two Sites
+w32tm /query /status
+* GC Check between two sites 
+Test-NetConnection 192.168.1.115 -Port 3268
+
+In a real enterprise environment (especially during a merger or acquisition), 
+these details are what prevent a 2:00 AM bridge call.
+
+The Global Catalog Check (Port 3268): This is a high-level addition. In multi-domain 
+forests, if Port 3268 is blocked, cross-forest group membership lookups will fail, 
+even if the trust is "up." You caught a very common troubleshooting blind spot.
+
+W32Time Validation: Checking time status is crucial. Since Kerberos relies on timestamps, 
+a difference of $>300$ seconds (5 minutes) between microtech.local and nokia.local will 
+cause the trust to fail silently.
+
+===================================================================================
+PHASE 8 — CROSS-FOREST AUTHENTICATION TEST
+===================================================================================
+
+--- From MicroTech DC ---
+
+Get-ADUser -Server DC-1.nokia.local -Filter * | Select -First 1
+
+--------------------------------------------------------------------
+--- From NOKIA DC ---
+
+Get-ADUser -Server DC-1.microtech.local -Filter * | Select -First 1
+
+===================================================================================
+TRUST TYPES — REFERENCE
+===================================================================================
+
+DOMAIN TRUST
+• Between domains in the same forest
+• Automatically transitive
+
+FOREST TRUST
+• Between different forests
+• Transitive across all domains
+• Most common in modern enterprises
+
+EXTERNAL TRUST
+• Non-transitive
+• Legacy or special-purpose
+
+===================================================================================
+MENTAL MODEL
+===================================================================================
+
+Trust           = "I recognize your identity"
+Authentication  = "You proved who you are"
+Authorization   = "These are the doors you may open"
+
+A trust NEVER grants access by itself.
+===================================================================================

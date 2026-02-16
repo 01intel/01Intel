@@ -1,0 +1,504 @@
+====================================================================
+SKILL-SET LAB — MSP STORAGE FOUNDATIONS
+Project: Linux Headless File Server (INTEL-FTP)
+Company: 01 Intel Business Corporation
+====================================================================
+
+SCENARIO
+--------
+01 Intel Business Corporation is onboarding a new internal client
+that requires a centralized File Management solution.
+
+The solution must be:
+• Linux-based
+• Headless (no GUI)
+• Secure
+• Recoverable
+• Scalable
+• Built using enterprise best practices
+
+As an IT Systems Engineer at 01 Intel, your responsibility is to:
+• Design
+• Build
+• Validate
+• Document
+
+a production-ready Linux File Server that can be rebuilt, recovered,
+and repeated for real-life MSP client deployments.
+
+This lab is designed to be practiced repeatedly until all commands,
+concepts, and recovery steps become muscle memory.
+
+====================================================================
+PHASE 1 — INSTALL & CONFIGURE BASE SERVER
+====================================================================
+
+BOX REQUIREMENTS
+----------------
+1. OS: Ubuntu Server 24.04 LTS (Live Installer)
+2. Memory: 4 GB
+3. Processor: 1
+4. Socket: 1
+5. BIOS: Default (SeaBIOS)
+6. Primary Disk (OS):
+   • Bus: SCSI
+   • Size: 32 GB
+   • Format: qcow2
+   • Cache: Write Back
+7. SCSI Controller: VirtIO SCSI Single
+
+Purpose:
+• Dedicated OS disk
+• Clean separation between OS and data
+• Easier recovery in failure scenarios
+
+====================================================================
+PHASE 2 — CONFIGURE DISK POOL (LVM-BASED STORAGE)
+====================================================================
+
+------------------------------------------------------------
+2.1 — DISK PREPARATION & VERIFICATION
+------------------------------------------------------------
+
+Checklist-1:
+------------
+Confirm OS disk is present and correctly mounted.
+
+Command:
+    lsblk
+
+Expected Output:
+NAME                      MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda                         8:0    0   32G  0 disk
+├─sda1                      8:1    0    1M  0 part
+├─sda2                      8:2    0    2G  0 part /boot
+└─sda3                      8:3    0   30G  0 part
+  └─ubuntu--vg-ubuntu--lv 252:0    0   15G  0 lvm  /
+
+------------------------------------------------------------
+DATA DISK REQUIREMENTS					   
+------------------------------------------------------------
+1. Bus: SCSI
+2. SCSI Controller: VirtIO SCSI Single
+3. Storage: DATACENTER-3
+4. Disk Size: 2800 GiB
+5. Format: raw
+6. Cache: Default (No cache)
+7. Discard (TRIM): Enabled
+8. IO Thread: Enabled
+
+Checklist-2:
+------------
+Re-run disk verification.
+
+Command:
+    lsblk
+
+Expected Output:
+NAME                      MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda                         8:0    0   32G  0 disk
+├─sda1                      8:1    0    1M  0 part
+├─sda2                      8:2    0    2G  0 part /boot
+└─sda3                      8:3    0   30G  0 part
+  └─ubuntu--vg-ubuntu--lv 252:0    0   15G  0 lvm  /
+sdb                         8:16   0  2.7T  0 disk
+sr0                        11:0    1  3.1G  0 rom
+
+====================================================================
+2.2 — DISK PARTITIONING (GPT + LVM)
+====================================================================
+
+Step-1: Verify current disk label
+---------------------------------
+Command:
+    sudo parted /dev/sdb print
+
+Expected Output:
+    Partition Table: unknown
+
+Purpose:
+• Confirms disk is clean
+• No existing MBR or GPT
+• Safe to initialize
+
+------------------------------------------------------------
+Step-2: Create GPT Partition Table
+------------------------------------------------------------
+Command:
+    sudo parted /dev/sdb
+
+Inside parted:
+    mklabel gpt
+
+Confirm with "YES" if prompted.
+
+------------------------------------------------------------
+Step-3: Create Full-Disk Partition
+------------------------------------------------------------
+Inside parted:
+    mkpart primary 0% 100%
+
+------------------------------------------------------------
+Step-4: Enable LVM Flag
+------------------------------------------------------------
+Inside parted:
+    set 1 lvm on
+
+------------------------------------------------------------
+Step-5: Exit parted
+------------------------------------------------------------
+Inside parted:
+    quit
+
+------------------------------------------------------------
+Step-6: Verify GPT Layout
+------------------------------------------------------------
+Command:
+    sudo parted /dev/sdb print
+
+Expected Output:
+Partition Table: gpt
+Number  Start   End     Size    File system  Name     Flags
+ 1      1049kB  3006GB  3006GB               primary  lvm
+
+====================================================================
+2.3 — LVM CONFIGURATION (Logical Volume Manager) 
+====================================================================
+Remember- 
+	LVM is a storage abstraction layer.
+	With LVM - Storage is a pool
+		   sits between physical disks and filesystems
+		   Volumes can grow, shrink, move
+		   Disks can be added later
+		   
+Step-7: Create Physical Volume (PV)
+-----------------------------------
+Command:
+    sudo pvcreate /dev/sdb1
+
+Purpose:
+• Marks partition as usable by LVM
+
+------------------------------------------------------------
+Step-8: Create Volume Group (VG)
+------------------------------------------------------------
+Command:
+    sudo vgcreate vg_inteldata /dev/sdb1
+
+Purpose:
+• Creates a storage pool
+• Allows future disk expansion
+
+------------------------------------------------------------
+Step-9: Create Logical Volume (LV)
+------------------------------------------------------------
+Command:
+    sudo lvcreate -l 100%FREE -n lv_ftp vg_inteldata
+
+Notes:
+• Logical Volumes behave like virtual disks
+• Filesystems live on LVs, not PVs or VGs
+
+------------------------------------------------------------
+Step-10: Create Filesystem
+------------------------------------------------------------
+Command:
+    sudo mkfs.xfs /dev/vg_inteldata/lv_ftp
+
+Purpose:
+• XFS is optimized for large storage
+• Supports online expansion
+
+------------------------------------------------------------
+Step-11: Create Mount Point
+------------------------------------------------------------
+Command:
+    sudo mkdir -p /srv/intel-ftp
+
+Notes:
+• /srv is standard for service data
+• Preferred over /mnt in production
+
+------------------------------------------------------------
+Step-12: Mount Filesystem
+------------------------------------------------------------
+Command:
+    sudo mount /dev/vg_inteldata/lv_ftp /srv/intel-ftp
+
+====================================================================
+MENTAL MODEL (CRITICAL)
+====================================================================
+
+Physical Disk (/dev/sdb)
+  └── Partition (/dev/sdb1)
+        └── Physical Volume (PV)
+              └── Volume Group (vg_inteldata)
+                    └── Logical Volume (lv_ftp)
+                          └── Filesystem (XFS)
+                                └── Mounted at /srv/intel-ftp
+====================================================================
+PHASE 3 — FILE SERVER ACCESS FOR HOSTS (CLIENT SIDE)
+====================================================================
+
+GOAL
+----
+Provide secure, cross-platform file access for:
+• Linux
+• macOS
+• Windows
+
+Using:
+• SFTP → Secure file transfer (all OS)
+• SMB  → Drive mapping (macOS & Windows)
+
+ScreenConnect is used ONLY for management, not file access.
+
+====================================================================
+ARCHITECTURE OVERVIEW
+====================================================================
+
+Clients (Linux / macOS / Windows)
+        |
+     ZeroTier (Secure Overlay Network)
+        |
+  INTEL-FTP (Ubuntu Headless Server)
+        |
+   ├── SFTP (Primary, secure transfer)
+   └── SMB  (Optional, drive mapping)
+
+====================================================================
+3.1 — SFTP CONFIGURATION (SECURE FILE TRANSFER)
+====================================================================
+
+Purpose:
+• Encrypted file access
+• Works on all OS
+• No GUI required
+• NOT intended for “mapped drive” on macOS
+
+------------------------------------------------------------
+Step-1: Install OpenSSH Server
+------------------------------------------------------------
+Command:
+    sudo apt update
+    sudo apt install -y openssh-server
+
+Purpose:
+• Provides SSH and SFTP services
+
+Verify:
+    systemctl status ssh
+
+------------------------------------------------------------
+Step-2: Create Dedicated File User
+------------------------------------------------------------
+Command:
+    sudo adduser ftpuser
+
+Purpose:
+• Isolates file access from system users
+
+------------------------------------------------------------
+Step-3: Create User Data Directory
+------------------------------------------------------------
+Command:
+    sudo mkdir -p /srv/intel-ftp/ftpuser
+    sudo chown ftpuser:ftpuser /srv/intel-ftp/ftpuser
+    sudo chmod 750 /srv/intel-ftp/ftpuser
+
+Purpose:
+• Defines where user files live
+• Limits access to the owner only
+
+------------------------------------------------------------
+Step-4: Restrict User to SFTP Only
+------------------------------------------------------------
+Command:
+    sudo nano /etc/ssh/sshd_config
+
+Add at the BOTTOM:
+    Subsystem sftp internal-sftp
+
+    Match User ftpuser
+        ChrootDirectory /srv/intel-ftp
+        ForceCommand internal-sftp
+        AllowTCPForwarding no
+        X11Forwarding no
+
+Purpose:
+• Blocks shell access
+• Allows file transfer only
+• Increases security
+
+------------------------------------------------------------
+Step-5: Fix Chroot Permissions (CRITICAL)
+------------------------------------------------------------
+Command:
+    sudo chown root:root /srv/intel-ftp
+    sudo chmod 755 /srv/intel-ftp
+
+Purpose:
+• Required by SFTP chroot
+• If wrong → SFTP fails silently (Finder issue)
+
+------------------------------------------------------------
+Step-6: Restart SSH Service
+------------------------------------------------------------
+Command:
+    sudo systemctl restart ssh
+
+Purpose:
+• Applies configuration changes
+
+------------------------------------------------------------
+SFTP CLIENT NOTES
+------------------------------------------------------------
+• Linux → sftp / scp
+• Windows → WinSCP / FileZilla (SFTP mode)
+• macOS → Finder SFTP works for browsing, NOT mapping
+
+macOS limitation:
+• Finder SFTP ≠ mapped drive
+• sshfs is deprecated on macOS
+• This is why SMB is required next
+
+====================================================================
+3.2 — SMB CONFIGURATION (DRIVE MAPPING)
+====================================================================
+
+Purpose:
+• True “mapped drive” experience
+• Required for macOS & Windows
+• Used only over ZeroTier (not internet)
+
+------------------------------------------------------------
+Step-7: Install Samba
+------------------------------------------------------------
+Command:
+    sudo apt update
+    sudo apt install -y samba
+
+Purpose:
+• Provides SMB/CIFS file sharing
+
+------------------------------------------------------------
+Step-8: Create SMB Share Directory
+------------------------------------------------------------
+Command:
+    sudo mkdir -p /srv/intel-ftp/share
+
+Purpose:
+• Dedicated directory for mapped drives
+
+------------------------------------------------------------
+Step-9: Set Secure Permissions
+------------------------------------------------------------
+Command:
+    sudo chown root:root /srv/intel-ftp
+    sudo chmod 755 /srv/intel-ftp
+
+    sudo chown ftpuser:ftpuser /srv/intel-ftp/share
+    sudo chmod 770 /srv/intel-ftp/share
+
+Purpose:
+• Root owns chroot
+• User owns data
+• Prevents privilege escalation
+
+------------------------------------------------------------
+Step-10: Configure Samba Share
+------------------------------------------------------------
+Command:
+    sudo nano /etc/samba/smb.conf
+
+Add at the bottom:
+    [intel-ftp]
+        path = /srv/intel-ftp/share
+        browseable = yes
+        read only = no
+        valid users = ftpuser
+        force user = ftpuser
+        create mask = 0660
+        directory mask = 0770
+
+Purpose:
+• Defines share behavior
+• Ensures files are owned correctly
+
+------------------------------------------------------------
+Step-11: Set Samba Password
+------------------------------------------------------------
+Command:
+    sudo smbpasswd -a ftpuser
+
+Purpose:
+• SMB uses its own authentication database
+
+------------------------------------------------------------
+Step-12: Restart Samba
+------------------------------------------------------------
+Command:
+    sudo systemctl restart smbd
+    sudo systemctl enable smbd
+
+Purpose:
+• Activates SMB service
+• Ensures persistence on reboot
+
+====================================================================
+CLIENT ACCESS SUMMARY
+====================================================================
+
+Linux:
+• SFTP (secure transfer)
+• SMB optional
+
+macOS:
+• Finder SFTP → browsing only
+• SMB → mapped drive (recommended)
+
+Windows:
+• WinSCP (SFTP)
+• SMB mapped drive (Z:)
+
+Connection examples:
+• SFTP: sftp ftpuser@<zerotier-ip>
+• SMB : smb://<zerotier-ip>/intel-ftp
+• SMB (Windows): \\<zerotier-ip>\intel-ftp
+
+====================================================================
+IMPORTANT MSP PRINCIPLES
+====================================================================
+
+• SFTP ≠ drive mapping on macOS
+• SMB is required for Finder drive mounts
+• ScreenConnect ≠ file server
+• ZeroTier protects all file protocols
+• Less tools, correct tools = mastery
+
+====================================================================
+END OF PHASE 3
+====================================================================
+LAB RESET — PRACTICE & REPEAT
+====================================================================
+
+Purpose:
+• Reset disk to clean state
+• Re-practice partitioning and LVM
+• Build muscle memory
+
+Commands:
+    sudo sgdisk --zap-all /dev/sdb
+    sudo dd if=/dev/zero of=/dev/sdb bs=1M count=10
+    sudo dd if=/dev/zero of=/dev/sdb bs=1M \
+      seek=$(( $(blockdev --getsz /dev/sdb) / 2048 - 10 )) count=10
+
+Verification:
+    sudo parted /dev/sdb print
+
+Expected Output:
+    Partition Table: unknown
+
+====================================================================
+END OF SKILL-SET LAB
+====================================================================

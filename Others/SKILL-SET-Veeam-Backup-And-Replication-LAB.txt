@@ -1,0 +1,278 @@
+=========================================================================
+              VEEAM BACKUP & REPLICATION – HANDS-ON LAB
+=========================================================================
+Environment:
+- Backup Server: Dedicated Windows Server 2022 (Veeam installed)
+- Target VM(s): DC-1, STN-1 (MicroTech Lab)
+- Repository Disk: Separate volume (Example: V:\ or D:\)
+- Edition: Community Edition
+
+=========================================================================
+DAY 1 – CORE VM BACKUP OPERATIONS
+=========================================================================
+
+1) Install Veeam Backup & Replication
+--------------------------------------
+Action:
+- Install Veeam on a dedicated Windows Server (NOT a Domain Controller).
+
+Purpose:
+- This server becomes the Backup Management Server (the "brain").
+- It controls jobs, repositories, restores, and scheduling.
+
+Best Practice:
+- Never install Veeam on a Domain Controller in production.
+- Use a dedicated server for isolation and security.
+
+
+2) Add Backup Repository (Storage Location)
+-------------------------
+Navigation:
+Backup Infrastructure → Backup Repositories → Add Repository
+
+Configuration:
+- Type: Direct Attached Storage
+- Location: Dedicated disk (NOT C:)
+  Example: D:\VeeamRepo or V:\Backup
+
+Purpose:
+- Repository stores backup files:
+    .vbk  = Full backup
+    .vib  = Incremental backup
+- VBRCatalog folder stores file indexing data for fast file-level restore.
+
+Important:
+- Veeam automatically creates:
+    \Backup
+    \VBRCatalog
+
+Best Practice:
+- Never store backups on OS disk.
+- Always use separate volume for performance and safety.
+
+
+3) Add Hypervisor (Add VM Source)
+-----------------------------------
+If using Hyper-V:
+
+Navigation:
+Inventory → Add Server → Microsoft Hyper-V
+
+Action:
+- Add your Hyper-V host
+- Provide credentials
+
+Purpose:
+- Veeam connects to the hypervisor layer (not just the VM OS).
+- This enables image-level backups.
+
+Best Practice:
+- Lab: Domain admin is fine.
+- Production: Use dedicated service account.
+
+
+4) Create Backup Job (Image-Level VM Backup)
+---------------------------------------------
+Navigation:
+Home → Backup Job → Virtual Machine
+
+Configuration:
+- Select VM: DC-1
+- Repository: D:\VeeamRepo
+- Leave default incremental mode
+- Retention: Default for now
+
+Purpose:
+Job defines:
+- What to back up
+- Where to store
+- Retention rules
+- Schedule
+
+
+5) Configure Schedule
+----------------------
+Within Job Settings:
+Schedule → Daily → 10:00 PM
+
+Purpose:
+- Automates protection.
+- Removes manual dependency.
+
+Best Practice:
+- Schedule outside business hours.
+- Avoid IO impact during working hours.
+
+
+6) Run Initial Backup
+----------------------
+Action:
+Right-click Job → Start
+
+Observe:
+- First run creates ACTIVE FULL backup (.vbk)
+- Monitor size and duration.
+
+Understanding:
+- First backup is always Full.
+- This becomes baseline image.
+- Future backups will be Incremental (.vib).
+
+Important: Verification: 
+Home → Backups → Disk
+
+Expand:
+Agent Backup Job 1
+→ DC-1.microtech.local
+
+7) Test File-Level Restore
+---------------------------
+Scenario:
+- Delete a test file inside DC-1.
+
+Navigation:
+Home → Restore → Guest Files → Microsoft Windows
+
+Action:
+- Browse backup
+- Restore deleted file
+
+Purpose:
+- Validate backup integrity.
+- Prove recovery works.
+
+Critical Rule:
+Backups are useless if restores are not tested.
+
+
+=========================================================================
+DAY 2 – ADVANCED CONTROL & DR STRATEGY
+=========================================================================
+
+1) Create Agent-Based Backup Job
+---------------------------------
+Install:
+- Veeam Agent for Microsoft Windows on STN-1
+
+Navigation in Veeam:
+Inventory → Physical & Cloud Infrastructure → Add Windows Computer
+
+Create:
+- Protection Group
+- Agent backup job
+
+Purpose:
+- Protect physical servers
+- Protect standalone systems
+- Protect systems without hypervisor access
+
+Use Case:
+- Branch office servers
+- Direct-to-cloud backups
+- Physical workloads
+
+
+2) Understand Retention Policy
+-------------------------------
+Navigation:
+Edit Job → Storage → Retention Policy
+
+Example:
+Set to 7 restore points
+
+Meaning:
+- If running daily backups:
+  You can restore back 7 days.
+- Oldest restore point auto-deletes.
+
+Important:
+Retention is COUNT-based, not DATE-based.
+
+
+3) Create Backup Copy Job (Disaster Recovery Layer)
+----------------------------------------------------
+Navigation:
+Home → Backup Copy Job
+
+Source:
+- Primary backup job
+
+Target:
+- Another repository (lab simulation)
+OR
+- Cloud Connect (real-world scenario)
+
+Purpose:
+- Primary job = Local recovery
+- Backup copy job = Disaster recovery
+
+Key Concept:
+Backup Copy job reads from repository,
+NOT from production VM.
+
+Implements 3-2-1 Rule:
+- 3 copies of data
+- 2 different storage types
+- 1 offsite copy
+
+
+4) Understand Backup Types
+---------------------------
+Initial Backup:
+- Active Full (.vbk)
+
+Subsequent Backups:
+- Incremental (.vib)
+- Stores only changed blocks
+
+Benefits of Incremental:
+- Saves storage
+- Faster processing
+- Efficient bandwidth usage
+
+Manual Option:
+- Active Full forces new full backup.
+
+Production Best Practice:
+- Use Synthetic Full weekly.
+
+
+5) Full VM Restore (Disaster Simulation)
+------------------------------------------
+Scenario:
+Simulate complete VM loss.
+
+Steps:
+- Power off DC-1
+- Delete DC-1 from Hyper-V
+
+Navigation:
+Home → Restore → Entire VM
+
+Action:
+- Restore to original location
+
+Purpose:
+- Validate full disaster recovery capability.
+- Build operational confidence.
+
+Key Lesson:
+Recovery confidence separates engineers from button-clickers.
+
+
+=========================================================================
+LAB TRAINING STRATEGY
+=========================================================================
+
+After completing both days:
+
+- Revert snapshots (Lab Only)
+- Repeat without notes
+- Practice until fluent
+
+Goal:
+Perform repository setup, job creation, scheduling,
+backup, and restore from memory.
+
+Mastery = Confidence + Repetition.
+=========================================================================
